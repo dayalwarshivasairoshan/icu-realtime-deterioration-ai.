@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Real-Time Deterioration Monitor (IBM LinuxONE demo)</title>
+<style>
+:root{--bg:#f5f7fb;--card:#fff;--text:#0b1f3a;--mut:#5a667a;--line:#dde3ee;--blue:#0f62ff;--red:#da1e28;--amb:#f1a100;--grn:#198038}
+@media(prefers-color-scheme:dark){:root{--bg:#10151f;--card:#1a2230;--text:#e8edf6;--mut:#9aa7bd;--line:#2c374a}}
+*{box-sizing:border-box}body{margin:0;font-family:system-ui,Segoe UI,Arial,sans-serif;background:var(--bg);color:var(--text)}
+header{padding:16px 24px;background:#0b1f3a;color:#fff}header h1{margin:0;font-size:20px}header p{margin:4px 0 0;color:#bbd0ff;font-size:13px}
+main{max-width:1200px;margin:auto;padding:16px}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px}
+.c{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px}.c b{font-size:26px;display:block}.c span{color:var(--mut);font-size:12px}
+.grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.3fr);gap:12px;margin-top:12px}
+@media(max-width:800px){.grid{grid-template-columns:1fr}}
+.p{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px}.p h2{margin:0 0 8px;font-size:15px}
+.scroll{max-height:420px;overflow:auto}
+.row{display:flex;align-items:center;gap:8px;padding:6px;border-radius:6px;cursor:pointer;font-size:13px}.row:hover,.row.sel{background:var(--line)}
+.row .id{width:48px;font-weight:600}.row .tag{width:90px;color:var(--mut)}.row svg{flex:1;height:22px}
+.pill{padding:2px 8px;border-radius:99px;font-size:11px;color:#fff}.W{background:var(--amb)}.C{background:var(--red)}
+table{width:100%;border-collapse:collapse;font-size:13px}td,th{text-align:left;padding:5px;border-bottom:1px solid var(--line)}
+small{color:var(--mut)}
+</style></head><body>
+<header><h1>Real-Time AI for Critical Decisions</h1><p>Simulated ICU ward on IBM LinuxONE. All data is synthetic.</p></header>
+<main>
+<div class="cards" id="cards"></div>
+<div class="grid">
+ <div class="p"><h2>Patients <small>(sorted by peak risk, click to inspect)</small></h2><div class="scroll" id="list"></div></div>
+ <div class="p"><h2 id="dtitle">Patient detail</h2><svg id="chart" viewBox="0 0 600 240" width="100%"></svg>
+  <small>Blue: AI risk score. Dashed lines: 0.70 warning, 0.90 critical. Red ticks: alerts raised. Grey: onset of real deterioration.</small>
+  <h2 style="margin-top:12px">Alert feed</h2><div class="scroll" style="max-height:160px"><table id="feed"></table></div></div>
+</div></main>
+<script>
+const D=__DATA__;const S=D.summary;
+const red=Math.round(100*(1-S.ai_alerts/Math.max(S.naive_alarms,1)));
+const cards=[[S.naive_alarms,"fixed-threshold alarms"],[S.ai_alerts,"AI prioritized alerts"],[red+"%","fewer interruptions"],
+[S.detected+" / "+S.deteriorating,"deteriorating patients caught"],[S.median_lead_min+" min","median warning before critical"],[S.model_auc,"model AUC (synthetic)"]];
+document.getElementById("cards").innerHTML=cards.map(c=>`<div class="c"><b>${c[0]}</b><span>${c[1]}</span></div>`).join("");
+const P=[...D.patients].sort((a,b)=>Math.max(...b.risk)-Math.max(...a.risk));
+function spark(r){const n=r.length;return `<svg viewBox="0 0 120 22" preserveAspectRatio="none"><polyline fill="none" stroke="#0f62ff" stroke-width="1.5" points="${r.map((v,i)=>(i/(n-1)*120).toFixed(1)+","+(21-v*20).toFixed(1)).join(" ")}"/></svg>`}
+const list=document.getElementById("list");
+list.innerHTML=P.map(p=>`<div class="row" data-id="${p.id}"><span class="id">${p.id}</span><span class="tag">${p.condition}</span>${spark(p.risk)}<span>${Math.max(...p.risk).toFixed(2)}</span></div>`).join("");
+function show(id){
+ const p=D.patients.find(x=>x.id==id);document.getElementById("dtitle").textContent=p.id+" ("+p.condition+")";
+ document.querySelectorAll(".row").forEach(r=>r.classList.toggle("sel",r.dataset.id==id));
+ const n=p.risk.length,x=i=>30+i/(n-1)*560,y=v=>220-v*200;let s="";
+ [0,.5,.7,.9,1].forEach(v=>s+=`<line x1="30" x2="590" y1="${y(v)}" y2="${y(v)}" stroke="currentColor" opacity="${v==.7||v==.9?.5:.15}" ${v==.7||v==.9?'stroke-dasharray="4"':""}/><text x="2" y="${y(v)+4}" font-size="10" fill="currentColor">${v}</text>`);
+ if(p.onset>=0)s+=`<line x1="${x(p.onset)}" x2="${x(p.onset)}" y1="20" y2="220" stroke="gray" stroke-width="2"/>`;
+ s+=`<polyline fill="none" stroke="#0f62ff" stroke-width="2" points="${p.risk.map((v,i)=>x(i)+","+y(v)).join(" ")}"/>`;
+ D.alerts.filter(a=>a.pid==id).forEach(a=>s+=`<line x1="${x(a.t)}" x2="${x(a.t)}" y1="20" y2="220" stroke="#da1e28" stroke-width="2"/>`);
+ document.getElementById("chart").innerHTML=s;
+ const al=D.alerts.filter(a=>a.pid==id);
+ document.getElementById("feed").innerHTML="<tr><th>Minute</th><th>Tier</th><th>Risk</th></tr>"+(al.length?al.map(a=>`<tr><td>${a.t}</td><td><span class="pill ${a.tier[0]}">${a.tier}</span></td><td>${a.risk}</td></tr>`).join(""):"<tr><td colspan=3>No alerts (naive monitor fired "+p.naive+" times)</td></tr>");
+}
+list.addEventListener("click",e=>{const r=e.target.closest(".row");if(r)show(r.dataset.id)});
+show((P.find(p=>D.alerts.some(a=>a.pid==p.id))||P[0]).id);
+</script></body></html>
